@@ -1,0 +1,715 @@
+--// LOG NOTIFIER — Interface améliorée + JOIN par log + Discord Webhook
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+
+local player = Players.LocalPlayer
+
+local API_URL =
+    "https://autojoiner2-2d181-default-rtdb.firebaseio.com/logs.json"
+
+local WEBHOOK_URL =
+    "https://discord.com/api/webhooks/1540717897763266630/KWoiIbkH1TMs6_V4M0sQx5k9xLes0rsKjS6LsAc1cDDmKENXP7NtTYf8DCXr_v3i_0Uj"
+
+local enabled = false
+local lastPlaceId = nil
+local lastJobId = nil
+local lastLogId = nil
+local logCount = 0
+
+-- ===================== COULEURS =====================
+local COLORS = {
+    MainBG      = Color3.fromRGB(12, 12, 16),
+    HeaderBG    = Color3.fromRGB(18, 18, 24),
+    CardBG      = Color3.fromRGB(22, 22, 28),
+    Stroke      = Color3.fromRGB(40, 40, 52),
+    White       = Color3.fromRGB(245, 245, 250),
+    Gray        = Color3.fromRGB(140, 140, 150),
+    SoftGray    = Color3.fromRGB(100, 100, 110),
+    ButtonBG    = Color3.fromRGB(28, 28, 36),
+    ButtonHover = Color3.fromRGB(38, 38, 48),
+    Green       = Color3.fromRGB(0, 220, 120),
+    GreenDark   = Color3.fromRGB(0, 160, 90),
+    Red         = Color3.fromRGB(230, 70, 70),
+    Accent      = Color3.fromRGB(90, 140, 255)
+}
+
+-- ===================== GUI ROOT =====================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "LogNotifier"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+pcall(function()
+    ScreenGui.Parent = gethui()
+end)
+if not ScreenGui.Parent then
+    ScreenGui.Parent = CoreGui
+end
+
+-- ===================== STATUS BAR =====================
+local StatusBar = Instance.new("Frame")
+StatusBar.Parent = ScreenGui
+StatusBar.BackgroundColor3 = COLORS.HeaderBG
+StatusBar.Size = UDim2.new(0, 300, 0, 46)
+StatusBar.Position = UDim2.new(0.35, 0, 0.015, 0)
+StatusBar.BorderSizePixel = 0
+StatusBar.Active = true
+StatusBar.Draggable = true
+StatusBar.ZIndex = 50
+Instance.new("UICorner", StatusBar).CornerRadius = UDim.new(0, 10)
+
+local SBStroke = Instance.new("UIStroke")
+SBStroke.Parent = StatusBar
+SBStroke.Color = COLORS.Stroke
+SBStroke.Thickness = 1.4
+
+local function MakeStatusColumn(parent, x, label, value)
+    local dot = Instance.new("Frame")
+    dot.Parent = parent
+    dot.BackgroundColor3 = COLORS.Red
+    dot.Position = UDim2.new(0, x, 0, 11)
+    dot.Size = UDim2.new(0, 8, 0, 8)
+    dot.BorderSizePixel = 0
+    dot.ZIndex = 51
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+    local top = Instance.new("TextLabel")
+    top.Parent = parent
+    top.BackgroundTransparency = 1
+    top.Position = UDim2.new(0, x + 14, 0, 6)
+    top.Size = UDim2.new(0, 95, 0, 14)
+    top.Font = Enum.Font.GothamBold
+    top.Text = label
+    top.TextColor3 = COLORS.SoftGray
+    top.TextSize = 10
+    top.TextXAlignment = Enum.TextXAlignment.Left
+    top.ZIndex = 51
+
+    local val = Instance.new("TextLabel")
+    val.Parent = parent
+    val.BackgroundTransparency = 1
+    val.Position = UDim2.new(0, x + 14, 0, 22)
+    val.Size = UDim2.new(0, 95, 0, 16)
+    val.Font = Enum.Font.GothamBold
+    val.Text = value
+    val.TextColor3 = COLORS.Gray
+    val.TextSize = 13
+    val.TextXAlignment = Enum.TextXAlignment.Left
+    val.ZIndex = 51
+
+    return dot, val
+end
+
+local ApiDot, ApiValue = MakeStatusColumn(StatusBar, 16, "Logger", "OFF")
+
+local Divider = Instance.new("Frame")
+Divider.Parent = StatusBar
+Divider.BackgroundColor3 = COLORS.Stroke
+Divider.Position = UDim2.new(0, 128, 0, 10)
+Divider.Size = UDim2.new(0, 1, 0, 26)
+Divider.BorderSizePixel = 0
+Divider.ZIndex = 51
+
+local LogDot, LogValue = MakeStatusColumn(StatusBar, 142, "Logs", "0")
+
+-- ===================== MAIN FRAME =====================
+local MainFrame = Instance.new("Frame")
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = COLORS.MainBG
+MainFrame.Position = UDim2.new(0.36, 0, 0.28, 0)
+MainFrame.Size = UDim2.new(0, 340, 0, 420)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 14)
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Parent = MainFrame
+MainStroke.Color = COLORS.Stroke
+MainStroke.Thickness = 1.5
+
+-- Header
+local Header = Instance.new("Frame")
+Header.Parent = MainFrame
+Header.BackgroundColor3 = COLORS.HeaderBG
+Header.Size = UDim2.new(1, 0, 0, 52)
+Header.BorderSizePixel = 0
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 14)
+
+local HeaderHide = Instance.new("Frame")
+HeaderHide.Parent = Header
+HeaderHide.BackgroundColor3 = COLORS.HeaderBG
+HeaderHide.Position = UDim2.new(0, 0, 1, -14)
+HeaderHide.Size = UDim2.new(1, 0, 0, 14)
+HeaderHide.BorderSizePixel = 0
+
+local StatusDot = Instance.new("Frame")
+StatusDot.Parent = Header
+StatusDot.BackgroundColor3 = COLORS.Red
+StatusDot.Position = UDim2.new(0, 18, 0.5, -8)
+StatusDot.Size = UDim2.new(0, 16, 0, 16)
+StatusDot.BorderSizePixel = 0
+Instance.new("UICorner", StatusDot).CornerRadius = UDim.new(1, 0)
+
+local Title = Instance.new("TextLabel")
+Title.Parent = Header
+Title.BackgroundTransparency = 1
+Title.Position = UDim2.new(0, 44, 0, 10)
+Title.Size = UDim2.new(0, 200, 0, 32)
+Title.Font = Enum.Font.GothamBold
+Title.Text = "LOG | NOTIFIER"
+Title.TextColor3 = COLORS.White
+Title.TextSize = 15
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+local Minimize = Instance.new("TextButton")
+Minimize.Parent = Header
+Minimize.BackgroundTransparency = 1
+Minimize.Position = UDim2.new(1, -42, 0, 12)
+Minimize.Size = UDim2.new(0, 28, 0, 28)
+Minimize.Font = Enum.Font.GothamBold
+Minimize.Text = "−"
+Minimize.TextColor3 = COLORS.Gray
+Minimize.TextSize = 18
+
+Minimize.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+end)
+
+local HeaderDivider = Instance.new("Frame")
+HeaderDivider.Parent = MainFrame
+HeaderDivider.BackgroundColor3 = COLORS.Stroke
+HeaderDivider.Position = UDim2.new(0, 0, 0, 52)
+HeaderDivider.Size = UDim2.new(1, 0, 0, 1)
+HeaderDivider.BorderSizePixel = 0
+
+-- Left sidebar
+local LeftContainer = Instance.new("Frame")
+LeftContainer.Parent = MainFrame
+LeftContainer.BackgroundColor3 = COLORS.HeaderBG
+LeftContainer.Position = UDim2.new(0, 6, 0, 58)
+LeftContainer.Size = UDim2.new(0, 52, 1, -64)
+LeftContainer.BorderSizePixel = 0
+Instance.new("UICorner", LeftContainer).CornerRadius = UDim.new(0, 10)
+
+local function SideButton(text, y)
+    local btn = Instance.new("TextButton")
+    btn.Parent = LeftContainer
+    btn.BackgroundColor3 = COLORS.ButtonBG
+    btn.Position = UDim2.new(0, 8, 0, y)
+    btn.Size = UDim2.new(0, 36, 0, 36)
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold
+    btn.Text = text
+    btn.TextColor3 = COLORS.White
+    btn.TextSize = 10
+    btn.AutoButtonColor = false
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = COLORS.ButtonHover
+        }):Play()
+    end)
+
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.15), {
+            BackgroundColor3 = COLORS.ButtonBG
+        }):Play()
+    end)
+
+    return btn
+end
+
+local HomeButton = SideButton("LOG", 12)
+local InfoButton = SideButton("INFO", 56)
+
+-- Right content area
+local RightContainer = Instance.new("Frame")
+RightContainer.Parent = MainFrame
+RightContainer.BackgroundColor3 = COLORS.HeaderBG
+RightContainer.Position = UDim2.new(0, 64, 0, 58)
+RightContainer.Size = UDim2.new(1, -70, 1, -64)
+RightContainer.BorderSizePixel = 0
+RightContainer.ClipsDescendants = true
+Instance.new("UICorner", RightContainer).CornerRadius = UDim.new(0, 10)
+
+-- Log list
+local LogContent = Instance.new("ScrollingFrame")
+LogContent.Parent = RightContainer
+LogContent.BackgroundTransparency = 1
+LogContent.Size = UDim2.new(1, 0, 1, -98)
+LogContent.CanvasSize = UDim2.new(0, 0, 0, 0)
+LogContent.AutomaticCanvasSize = Enum.AutomaticSize.Y
+LogContent.ScrollBarThickness = 4
+LogContent.ScrollBarImageColor3 = COLORS.Gray
+LogContent.BorderSizePixel = 0
+LogContent.ScrollingDirection = Enum.ScrollingDirection.Y
+
+local Padding = Instance.new("UIPadding")
+Padding.Parent = LogContent
+Padding.PaddingLeft = UDim.new(0, 8)
+Padding.PaddingRight = UDim.new(0, 8)
+Padding.PaddingTop = UDim.new(0, 8)
+Padding.PaddingBottom = UDim.new(0, 8)
+
+local Layout = Instance.new("UIListLayout")
+Layout.Parent = LogContent
+Layout.SortOrder = Enum.SortOrder.LayoutOrder
+Layout.Padding = UDim.new(0, 6)
+
+-- Placeholder "aucun log"
+local EmptyLabel = Instance.new("TextLabel")
+EmptyLabel.Name = "EmptyLabel"
+EmptyLabel.Parent = LogContent
+EmptyLabel.BackgroundTransparency = 1
+EmptyLabel.Size = UDim2.new(1, 0, 0, 40)
+EmptyLabel.Font = Enum.Font.Gotham
+EmptyLabel.Text = "Aucun log pour le moment..."
+EmptyLabel.TextColor3 = COLORS.SoftGray
+EmptyLabel.TextSize = 13
+EmptyLabel.TextXAlignment = Enum.TextXAlignment.Center
+EmptyLabel.LayoutOrder = 9999
+
+-- Bouton JOIN global (dernier serveur)
+local JoinButton = Instance.new("TextButton")
+JoinButton.Parent = RightContainer
+JoinButton.BackgroundColor3 = COLORS.GreenDark
+JoinButton.Position = UDim2.new(0, 8, 1, -90)
+JoinButton.Size = UDim2.new(1, -16, 0, 36)
+JoinButton.BorderSizePixel = 0
+JoinButton.Font = Enum.Font.GothamBold
+JoinButton.Text = "JOIN LAST SERVER"
+JoinButton.TextColor3 = COLORS.White
+JoinButton.TextSize = 13
+JoinButton.AutoButtonColor = false
+Instance.new("UICorner", JoinButton).CornerRadius = UDim.new(0, 8)
+
+JoinButton.MouseEnter:Connect(function()
+    TweenService:Create(JoinButton, TweenInfo.new(0.15), {
+        BackgroundColor3 = COLORS.Green
+    }):Play()
+end)
+
+JoinButton.MouseLeave:Connect(function()
+    TweenService:Create(JoinButton, TweenInfo.new(0.15), {
+        BackgroundColor3 = COLORS.GreenDark
+    }):Play()
+end)
+
+JoinButton.MouseButton1Click:Connect(function()
+    if not lastPlaceId or not lastJobId or not tonumber(lastPlaceId) then
+        JoinButton.Text = "NO SERVER"
+        task.delay(1.2, function()
+            if JoinButton then JoinButton.Text = "JOIN LAST SERVER" end
+        end)
+        return
+    end
+
+    JoinButton.Text = "JOINING..."
+    JoinButton.BackgroundColor3 = COLORS.Accent
+
+    pcall(function()
+        TeleportService:TeleportToPlaceInstance(
+            tonumber(lastPlaceId),
+            tostring(lastJobId),
+            player
+        )
+    end)
+
+    task.delay(2.5, function()
+        if JoinButton then
+            JoinButton.Text = "JOIN LAST SERVER"
+            JoinButton.BackgroundColor3 = COLORS.GreenDark
+        end
+    end)
+end)
+
+-- Toggle Logger (bas)
+local Toggle = Instance.new("TextButton")
+Toggle.Parent = RightContainer
+Toggle.BackgroundColor3 = COLORS.ButtonBG
+Toggle.Position = UDim2.new(0, 8, 1, -46)
+Toggle.Size = UDim2.new(1, -16, 0, 36)
+Toggle.BorderSizePixel = 0
+Toggle.Text = ""
+Toggle.AutoButtonColor = false
+Instance.new("UICorner", Toggle).CornerRadius = UDim.new(0, 8)
+
+local ToggleText = Instance.new("TextLabel")
+ToggleText.Parent = Toggle
+ToggleText.BackgroundTransparency = 1
+ToggleText.Position = UDim2.new(0, 14, 0, 0)
+ToggleText.Size = UDim2.new(0, 120, 1, 0)
+ToggleText.Font = Enum.Font.GothamBold
+ToggleText.Text = "Logger"
+ToggleText.TextColor3 = COLORS.White
+ToggleText.TextSize = 13
+ToggleText.TextXAlignment = Enum.TextXAlignment.Left
+
+local ToggleSwitch = Instance.new("Frame")
+ToggleSwitch.Parent = Toggle
+ToggleSwitch.BackgroundColor3 = COLORS.ButtonHover
+ToggleSwitch.Position = UDim2.new(1, -52, 0.5, -11)
+ToggleSwitch.Size = UDim2.new(0, 40, 0, 22)
+ToggleSwitch.BorderSizePixel = 0
+Instance.new("UICorner", ToggleSwitch).CornerRadius = UDim.new(1, 0)
+
+local ToggleCircle = Instance.new("Frame")
+ToggleCircle.Parent = ToggleSwitch
+ToggleCircle.BackgroundColor3 = COLORS.Gray
+ToggleCircle.Position = UDim2.new(0, 3, 0.5, -8)
+ToggleCircle.Size = UDim2.new(0, 16, 0, 16)
+ToggleCircle.BorderSizePixel = 0
+Instance.new("UICorner", ToggleCircle).CornerRadius = UDim.new(1, 0)
+
+local function SetEnabled(state)
+    enabled = state
+
+    local pos = enabled
+        and UDim2.new(1, -19, 0.5, -8)
+        or UDim2.new(0, 3, 0.5, -8)
+
+    TweenService:Create(ToggleCircle, TweenInfo.new(0.22), {
+        Position = pos,
+        BackgroundColor3 = enabled and COLORS.Green or COLORS.Gray
+    }):Play()
+
+    ApiDot.BackgroundColor3 = enabled and COLORS.Green or COLORS.Red
+    ApiValue.Text = enabled and "ON" or "OFF"
+    ApiValue.TextColor3 = enabled and COLORS.Green or COLORS.Gray
+    StatusDot.BackgroundColor3 = enabled and COLORS.Green or COLORS.Red
+end
+
+Toggle.MouseButton1Click:Connect(function()
+    SetEnabled(not enabled)
+end)
+
+SetEnabled(false)
+
+-- ===================== REQUEST HELPER =====================
+local function GetRequestFunction()
+    return request or http_request or (syn and syn.request)
+end
+
+local function DoRequest(url, method, body, headers)
+    local requestFunction = GetRequestFunction()
+    if not requestFunction then
+        return nil
+    end
+
+    local success, result = pcall(function()
+        return requestFunction({
+            Url = url,
+            Method = method or "GET",
+            Headers = headers or {
+                ["Cache-Control"] = "no-cache"
+            },
+            Body = body
+        })
+    end)
+
+    if not success or not result then
+        return nil
+    end
+
+    return result
+end
+
+-- ===================== DISCORD WEBHOOK =====================
+local function SendToDiscord(data)
+    local placeId = tostring(data.PlaceId or "?")
+    local jobId = tostring(data.JobId or "?")
+    local brainrots = data.Brainrots or {}
+
+    local brainrotText = "Aucun"
+    if type(brainrots) == "table" and #brainrots > 0 then
+        brainrotText = table.concat(brainrots, ", ")
+    elseif type(brainrots) == "string" and brainrots ~= "" then
+        brainrotText = brainrots
+    end
+
+    local joinLink = string.format(
+        "https://www.roblox.com/games/%s?jobId=%s",
+        placeId,
+        jobId
+    )
+
+    local embed = {
+        title = "🔔 Nouveau Log détecté",
+        color = 5763719, -- vert
+        fields = {
+            {
+                name = "🧠 Brainrot",
+                value = "```" .. brainrotText .. "```",
+                inline = false
+            },
+            {
+                name = "📍 PlaceId",
+                value = "`" .. placeId .. "`",
+                inline = true
+            },
+            {
+                name = "🆔 JobId",
+                value = "`" .. jobId .. "`",
+                inline = true
+            },
+            {
+                name = "🔗 Lien Join",
+                value = "[Clique ici pour rejoindre](" .. joinLink .. ")",
+                inline = false
+            }
+        },
+        footer = {
+            text = "LOG | NOTIFIER • ID #" .. tostring(data.id or "?")
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+
+    local payload = HttpService:JSONEncode({
+        username = "Log Notifier",
+        embeds = { embed }
+    })
+
+    task.spawn(function()
+        DoRequest(WEBHOOK_URL, "POST", payload, {
+            ["Content-Type"] = "application/json"
+        })
+    end)
+end
+
+-- ===================== ADD LOG (avec bouton JOIN individuel) =====================
+local function AddLog(data)
+    logCount += 1
+
+    -- Cache le placeholder
+    if EmptyLabel and EmptyLabel.Parent then
+        EmptyLabel.Visible = false
+    end
+
+    local placeId = data.PlaceId
+    local jobId = data.JobId
+    local brainrots = data.Brainrots or {}
+
+    -- Carte
+    local card = Instance.new("Frame")
+    card.Parent = LogContent
+    card.BackgroundColor3 = COLORS.CardBG
+    card.Size = UDim2.new(1, 0, 0, 78)
+    card.BorderSizePixel = 0
+    card.LayoutOrder = -logCount
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Parent = card
+    stroke.Color = COLORS.Stroke
+    stroke.Thickness = 1
+
+    -- ID
+    local idLabel = Instance.new("TextLabel")
+    idLabel.Parent = card
+    idLabel.BackgroundTransparency = 1
+    idLabel.Position = UDim2.new(0, 10, 0, 6)
+    idLabel.Size = UDim2.new(0.7, 0, 0, 16)
+    idLabel.Font = Enum.Font.GothamBold
+    idLabel.Text = "#" .. tostring(data.id or "?")
+    idLabel.TextColor3 = COLORS.Accent
+    idLabel.TextSize = 12
+    idLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Brainrot name (principal)
+    local brainrotText = "Aucun"
+    if type(brainrots) == "table" and #brainrots > 0 then
+        brainrotText = table.concat(brainrots, ", ")
+    elseif type(brainrots) == "string" and brainrots ~= "" then
+        brainrotText = brainrots
+    end
+
+    local brainLabel = Instance.new("TextLabel")
+    brainLabel.Parent = card
+    brainLabel.BackgroundTransparency = 1
+    brainLabel.Position = UDim2.new(0, 10, 0, 24)
+    brainLabel.Size = UDim2.new(0.68, 0, 0, 18)
+    brainLabel.Font = Enum.Font.GothamBold
+    brainLabel.Text = brainrotText
+    brainLabel.TextColor3 = COLORS.White
+    brainLabel.TextSize = 12
+    brainLabel.TextXAlignment = Enum.TextXAlignment.Left
+    brainLabel.TextTruncate = Enum.TextTruncate.AtEnd
+
+    -- PlaceId
+    local placeLabel = Instance.new("TextLabel")
+    placeLabel.Parent = card
+    placeLabel.BackgroundTransparency = 1
+    placeLabel.Position = UDim2.new(0, 10, 0, 44)
+    placeLabel.Size = UDim2.new(0.68, 0, 0, 14)
+    placeLabel.Font = Enum.Font.Gotham
+    placeLabel.Text = "Place: " .. tostring(placeId or "?")
+    placeLabel.TextColor3 = COLORS.SoftGray
+    placeLabel.TextSize = 10
+    placeLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- JobId (tronqué)
+    local jobStr = tostring(jobId or "?")
+    if #jobStr > 18 then
+        jobStr = string.sub(jobStr, 1, 16) .. ".."
+    end
+
+    local jobLabel = Instance.new("TextLabel")
+    jobLabel.Parent = card
+    jobLabel.BackgroundTransparency = 1
+    jobLabel.Position = UDim2.new(0, 10, 0, 58)
+    jobLabel.Size = UDim2.new(0.68, 0, 0, 14)
+    jobLabel.Font = Enum.Font.Gotham
+    jobLabel.Text = "Job: " .. jobStr
+    jobLabel.TextColor3 = COLORS.SoftGray
+    jobLabel.TextSize = 10
+    jobLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+    -- Bouton JOIN individuel
+    local joinBtn = Instance.new("TextButton")
+    joinBtn.Parent = card
+    joinBtn.BackgroundColor3 = COLORS.GreenDark
+    joinBtn.Position = UDim2.new(1, -78, 0.5, -16)
+    joinBtn.Size = UDim2.new(0, 68, 0, 32)
+    joinBtn.BorderSizePixel = 0
+    joinBtn.Font = Enum.Font.GothamBold
+    joinBtn.Text = "JOIN"
+    joinBtn.TextColor3 = COLORS.White
+    joinBtn.TextSize = 12
+    joinBtn.AutoButtonColor = false
+    Instance.new("UICorner", joinBtn).CornerRadius = UDim.new(0, 7)
+
+    joinBtn.MouseEnter:Connect(function()
+        TweenService:Create(joinBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = COLORS.Green
+        }):Play()
+    end)
+
+    joinBtn.MouseLeave:Connect(function()
+        TweenService:Create(joinBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = COLORS.GreenDark
+        }):Play()
+    end)
+
+    joinBtn.MouseButton1Click:Connect(function()
+        if not placeId or not jobId or not tonumber(placeId) then
+            joinBtn.Text = "ERR"
+            task.delay(1.2, function()
+                if joinBtn then joinBtn.Text = "JOIN" end
+            end)
+            return
+        end
+
+        joinBtn.Text = "..."
+        joinBtn.BackgroundColor3 = COLORS.Accent
+
+        pcall(function()
+            TeleportService:TeleportToPlaceInstance(
+                tonumber(placeId),
+                tostring(jobId),
+                player
+            )
+        end)
+
+        task.delay(2.5, function()
+            if joinBtn then
+                joinBtn.Text = "JOIN"
+                joinBtn.BackgroundColor3 = COLORS.GreenDark
+            end
+        end)
+    end)
+
+    LogValue.Text = tostring(logCount)
+end
+
+-- ===================== LOOP =====================
+task.spawn(function()
+    while true do
+        task.wait(3)
+
+        if enabled then
+            local result = DoRequest(API_URL, "GET")
+
+            if result and result.Body then
+                local success, data = pcall(function()
+                    return HttpService:JSONDecode(result.Body)
+                end)
+
+                if success and data and data.payload then
+                    if tostring(data.id) ~= tostring(lastLogId) then
+                        lastLogId = data.id
+
+                        local payload = data.payload
+
+                        lastPlaceId = payload.PlaceId
+                        lastJobId = payload.JobId
+
+                        local logData = {
+                            id = data.id,
+                            PlaceId = payload.PlaceId,
+                            JobId = payload.JobId,
+                            Brainrots = payload.Brainrots
+                        }
+
+                        AddLog(logData)
+                        SendToDiscord(logData) -- envoie sur Discord
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ===================== INFO / HOME =====================
+InfoButton.MouseButton1Click:Connect(function()
+    LogContent.Visible = false
+    Toggle.Visible = false
+    JoinButton.Visible = false
+
+    local info = RightContainer:FindFirstChild("InfoLabel")
+
+    if not info then
+        info = Instance.new("TextLabel")
+        info.Name = "InfoLabel"
+        info.Parent = RightContainer
+        info.BackgroundTransparency = 1
+        info.Position = UDim2.new(0, 14, 0, 14)
+        info.Size = UDim2.new(1, -28, 1, -70)
+        info.Font = Enum.Font.GothamMedium
+        info.TextColor3 = COLORS.White
+        info.TextSize = 12
+        info.TextWrapped = true
+        info.TextXAlignment = Enum.TextXAlignment.Left
+        info.TextYAlignment = Enum.TextYAlignment.Top
+    end
+
+    info.Text =
+        "LOG | NOTIFIER\n\n" ..
+        "Status : " .. (enabled and "ON" or "OFF") .. "\n" ..
+        "Logs reçus : " .. tostring(logCount) .. "\n\n" ..
+        "Dernier PlaceId :\n" .. tostring(lastPlaceId or "N/A") .. "\n\n" ..
+        "Dernier JobId :\n" .. tostring(lastJobId or "N/A") .. "\n\n" ..
+        "• Bouton JOIN sur chaque log\n" ..
+        "• Bouton JOIN LAST SERVER en bas\n" ..
+        "• Logs envoyés sur Discord"
+
+    info.Visible = true
+end)
+
+HomeButton.MouseButton1Click:Connect(function()
+    local info = RightContainer:FindFirstChild("InfoLabel")
+    if info then
+        info.Visible = false
+    end
+
+    LogContent.Visible = true
+    Toggle.Visible = true
+    JoinButton.Visible = true
+end)
+
+print("LOG | NOTIFIER (Improved + Discord) loaded")
